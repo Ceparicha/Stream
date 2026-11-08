@@ -1,0 +1,100 @@
+
+name: EPG automatisch bijwerken
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '17 */6 * * *'
+
+permissions:
+  contents: write
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: EPG lijsten downloaden en samenvoegen
+        env:
+          EPG_EU: ${{ secrets.EPG_EU }}
+          EPG_WORLD: ${{ secrets.EPG_WORLD }}
+        run: |
+          python - <<'PY'
+          import os
+          import gzip
+          import urllib.request
+          import xml.etree.ElementTree as ET
+
+          sources = [
+              os.environ["EPG_EU"],
+              os.environ["EPG_WORLD"]
+          ]
+
+          root = ET.Element("tv")
+          seen_channels = set()
+          seen_programmes = set()
+          channels = []
+          programmes = []
+
+          for url in sources:
+              req = urllib.request.Request(
+                  url,
+                  headers={"User-Agent": "Mozilla/5.0"}
+              )
+
+              with urllib.request.urlopen(req, timeout=180) as r:
+                  data = r.read()
+
+              if data[:2] == b"\x1f\x8b":
+                  data = gzip.decompress(data)
+
+              tv = ET.fromstring(data)
+
+              if tv.tag != "tv":
+                  raise ValueError("Ongeldige XMLTV EPG")
+
+              for item in tv:
+                  if item.tag == "channel":
+                      key = item.get("id")
+                      if key not in seen_channels:
+                          seen_channels.add(key)
+                          channels.append(item)
+
+                  elif item.tag == "programme":
+                      key = (
+                          item.get("channel"),
+                          item.get("start"),
+                          item.get("stop"),
+                          item.findtext("title")
+                      )
+                      if key not in seen_programmes:
+                          seen_programmes.add(key)
+                          programmes.append(item)
+
+          if not programmes:
+              raise ValueError("Geen EPG programma's gevonden")
+
+          root.extend(channels)
+          root.extend(programmes)
+
+          ET.ElementTree(root).write(
+              "epg.xml",
+              encoding="utf-8",
+              xml_declaration=True
+          )
+
+          print("Zenders:", len(channels))
+          print("Programma's:", len(programmes))
+          PY
+
+      - name: EPG publiceren
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add epg.xml
+          if ! git diff --cached --quiet; then
+            git commit -m "EPG bijgewerkt"
+            git push
+          fi
