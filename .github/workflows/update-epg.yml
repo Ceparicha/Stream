@@ -89,7 +89,7 @@ jobs:
           print("Zenders:", len(channels))
           print("Programma's:", len(programmes))
           PY
-          gzip -9 epg.xml
+          gzip -9f epg.xml
 
       - name: EPG publiceren
         run: |
